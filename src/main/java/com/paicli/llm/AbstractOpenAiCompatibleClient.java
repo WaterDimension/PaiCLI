@@ -46,6 +46,11 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
 
     protected abstract String getApiKey();
 
+    /**
+     * 检查是否应该在请求历史中发送 reasoning_content。
+     *
+     * @return 如果应该发送 reasoning_content，则返回true；否则返回false。
+     */
     protected boolean shouldSendReasoningContentInRequestHistory() {
         return false;
     }
