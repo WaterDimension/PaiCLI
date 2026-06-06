@@ -49,7 +49,6 @@ import java.util.concurrent.*;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.Locale;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -253,10 +252,12 @@ public class ToolRegistry {
         tools.put("write_file", new Tool(
                 "write_file",
                 "写入文件内容（仅限项目根目录之内，单文件 5MB 上限）",
+                // JSON Schema 格式的参数定义
                 createParameters(
                         new Param("path", "string", "文件路径", true),
                         new Param("content", "string", "文件内容", true)
                 ),
+                // write_file 工具的执行器（Lambda 表达式）
                 args -> {
                     String path = args.get("path");
                     String content = args.get("content") == null ? "" : args.get("content");
@@ -1001,14 +1002,20 @@ public class ToolRegistry {
     }
 
     /**
-     * 创建参数定义
+     * 将 Param 对象数组转换为 标准 JSON Schema 格式 的参数定义。
      */
     private JsonNode createParameters(Param... params) {
+        // 1. 创建根节点，类型为 object
         ObjectNode parameters = mapper.createObjectNode();
         parameters.put("type", "object");
+
+        // 2. 创建 properties 节点
         ObjectNode properties = parameters.putObject("properties");
+
+        // 3. 创建 required 字段（存储必填参数名）
         ArrayNode required = parameters.putArray("required");
 
+        // 4. 遍历所有 Param，构建参数定义
         for (Param param : params) {
             ObjectNode prop = properties.putObject(param.name());
             prop.put("type", param.type());
@@ -1372,6 +1379,9 @@ public class ToolRegistry {
     // 记录定义
     private record Param(String name, String type, String description, boolean required) {}
 
+    /**
+     * 工具记录，包含工具名称、描述、参数和执行器。
+     */
     public record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
 
     private record McpRegisteredTool(McpToolDescriptor descriptor, Function<String, ToolOutput> invoker) {}

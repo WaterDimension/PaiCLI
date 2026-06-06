@@ -50,9 +50,17 @@ public interface LlmClient {
             return "image_base64".equals(type) || "image_url".equals(type);
         }
     }
-
+    /**
+     * @param role 角色，例如 "system/user/assistant/tool"
+     * @param content 消息内容
+     * @param reasoningContent 推理内容（可选）（用于 DeepSeek/Kimi 的 thinking 模式）
+     * @param toolCalls 工具调用列表（可选）assistant 角色使用
+     * @param toolCallId 工具调用 ID（可选）(tool 角色使用)
+     * @param contentParts 多模态内容部分列表（支持图片等）（可选）
+     */
     record Message(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
                    String toolCallId, List<ContentPart> contentParts) {
+
         public Message(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
                        String toolCallId) {
             this(role, content, reasoningContent, toolCalls, toolCallId, null);
