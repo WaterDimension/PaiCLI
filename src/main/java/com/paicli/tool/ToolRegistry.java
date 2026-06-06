@@ -1003,6 +1003,12 @@ public class ToolRegistry {
 
     /**
      * 将 Param 对象数组转换为 标准 JSON Schema 格式 的参数定义。
+     * @param params 参数定义数组：type, description, required
+     * @return 标准 JSON Schema 格式的参数定义
+     * 
+        JsonNode          ← 所有节点的父类型
+        ├── ObjectNode  ← JSON 对象，存键值对（put / putObject / putArray）
+        └── ArrayNode   ← JSON 数组，存多个值（add）
      */
     private JsonNode createParameters(Param... params) {
         // 1. 创建根节点，类型为 object
@@ -1027,6 +1033,18 @@ public class ToolRegistry {
 
         return parameters;
     }
+    /*
+        {
+            "type": "object",
+            "properties": {
+                "path": {
+                "type": "string",
+                "description": "文件路径"
+                }
+            },
+            "required": ["path"]
+        } 
+    */
 
     /**
      * 获取所有工具定义（用于LLM）
@@ -1380,7 +1398,7 @@ public class ToolRegistry {
     private record Param(String name, String type, String description, boolean required) {}
 
     /**
-     * 工具记录，包含工具名称、描述、参数和执行器。
+     * 工具记录，包含工具名称、描述、JSON Schema 格式的参数和执行器。
      */
     public record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
 

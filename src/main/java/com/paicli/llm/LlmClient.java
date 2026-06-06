@@ -28,7 +28,16 @@ public interface LlmClient {
         return "none";
     }
 
+    /**
+     * 多模态内容部分记录，支持文本、图片等
+     * @param type 内容类型，例如 "text"、"image_base64"、"image_url"
+     * @param text 文本内容（可选）
+     * @param imageBase64 图片 base64 编码（可选）
+     * @param imageUrl 图片 URL（可选）
+     * @param mimeType 图片 MIME 类型（可选）
+     */
     record ContentPart(String type, String text, String imageBase64, String imageUrl, String mimeType) {
+        
         public static ContentPart text(String text) {
             return new ContentPart("text", text, null, null, null);
         }
@@ -55,7 +64,7 @@ public interface LlmClient {
      * @param content 消息内容
      * @param reasoningContent 推理内容（可选）（用于 DeepSeek/Kimi 的 thinking 模式）
      * @param toolCalls 工具调用列表（可选）assistant 角色使用
-     * @param toolCallId 工具调用 ID（可选）(tool 角色使用)
+     * @param toolCallId 工具调用 ID（可选）(tool 角色使用) ---- 每一个工具调用 ，都要创建 一条独立的 tool 消息 
      * @param contentParts 多模态内容部分列表（支持图片等）（可选）
      */
     record Message(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
@@ -103,10 +112,18 @@ public interface LlmClient {
             return new Message("tool", content, null, null, toolCallId);
         }
 
+        /**
+         * 是否包含多模态内容部分（支持图片等）
+         * @return 如果包含多模态内容部分，则返回 true；否则返回 false
+         */
         public boolean hasContentParts() {
             return contentParts != null && !contentParts.isEmpty();
         }
 
+        /**
+         * 是否包含图片内容（支持图片附件）
+         * @return 如果包含图片内容，则返回 true；否则返回 false
+         */
         public boolean hasImageContent() {
             return hasContentParts() && contentParts.stream().anyMatch(ContentPart::isImage);
         }

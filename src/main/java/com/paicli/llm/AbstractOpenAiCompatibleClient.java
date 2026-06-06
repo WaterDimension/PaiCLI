@@ -60,14 +60,31 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         return chat(messages, tools, StreamListener.NO_OP);
     }
 
+
+    /**
+     * 发送对话请求到 LLM API， 流式接收 响应，并实时通知 UI 更新。
+     *
+     * @param messages 消息列表，包含用户输入和工具调用。
+     * @param tools 工具列表，包含可用的工具。
+     * @param listener 流式响应监听器，用于处理响应数据。
+     * @return 包含模型响应的 ChatResponse 对象。
+     * @throws IOException 如果请求失败或响应解析失败。
+     */
     @Override
     public ChatResponse chat(List<Message> messages, List<Tool> tools, StreamListener listener) throws IOException {
+        /*
+            1. 初始化流式监听器
+            - StreamListener 是一个接口，定义了流式输出回调方法
+            - NO_OP 是空实现（什么都不做），用于测试或不需要实时显示的场景
+            作用 ：防止 listener 为 null 导致后续 NPE（空指针异常）
+        */ 
         StreamListener streamListener = listener == null ? StreamListener.NO_OP : listener;
         RequestBody body = RequestBody.create(
                 buildRequestBody(messages, tools).toString(),
                 MediaType.parse("application/json")
         );
 
+        // 2. 构建并发送 HTTP 请求
         Request request = new Request.Builder()
                 .url(getApiUrl())
                 .header("Authorization", "Bearer " + getApiKey())
@@ -75,6 +92,8 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 .post(body)
                 .build();
 
+        // 3. 执行请求并处理响应
+        // newCall(request) 创建一个调用对象（Call）；execute() 同步执行 请求（阻塞当前线程直到收到响应）
         try (Response response = SHARED_HTTP_CLIENT.newCall(request).execute()) {
             ResponseBody responseBodyObj = response.body();
             if (!response.isSuccessful()) {
@@ -84,18 +103,20 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
             if (responseBodyObj == null) {
                 throw new IOException("API返回空响应体");
             }
-
+        // 4. 解析响应体
+        // BufferedSource 是 OkHttp 提供的缓冲输入流，用于高效读取响应体
+        // readUtf8Line() 读取 UTF-8 编码的行，直到遇到换行符或文件结束
             BufferedSource source = responseBodyObj.source();
             String role = "assistant";
-            StringBuilder content = new StringBuilder();
-            StringBuilder reasoning = new StringBuilder();
-            List<ToolCallAccumulator> toolAccumulators = new ArrayList<>();
+            StringBuilder content = new StringBuilder();  // 累加完整的回复文本
+            StringBuilder reasoning = new StringBuilder();  // 累加推理过程
+            List<ToolCallAccumulator> toolAccumulators = new ArrayList<>(); //累加工具调用（可能分多帧发送）
             int inputTokens = 0;
             int outputTokens = 0;
             int cachedInputTokens = 0;
 
-            while (!source.exhausted()) {
-                String line = source.readUtf8Line();
+            while (!source.exhausted()) {   // 检查流是否读完
+                String line = source.readUtf8Line(); // 读取一行 UTF-8 文本（遇到 \n 停止）
                 if (line == null) {
                     break;
                 }
@@ -208,24 +229,40 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         return cached;
     }
 
+    /**
+     * 构建 OpenAI 兼容的请求体，包含模型、流式响应、消息和工具调用。
+     * @param messages 对话历史（system、user、assistant、tool 消息）
+     * @param tools 工具列表，包含可用的工具（write_file、read_file 等）
+     * @return 包含模型、流式响应、消息和工具调用的 JSON 对象。
+     */
     private ObjectNode buildRequestBody(List<Message> messages, List<Tool> tools) {
         ObjectNode requestBody = mapper.createObjectNode();
-        requestBody.put("model", getModel());
+        requestBody.put("model", getModel());   //getModel抽象类，子类实现返回模型名称
         requestBody.put("stream", true);
 
         ArrayNode messagesArray = requestBody.putArray("messages");
+
+        // 遍历并序列化每条消息，包括 reasoning_content 和 tool_calls
         for (Message msg : messages) {
-            ObjectNode msgNode = messagesArray.addObject();
+            ObjectNode msgNode = messagesArray.addObject();  //messagesArray对象的数组末尾追加一个新的空对象
+            // "messages": [
+            //     {"role": "assistant"}
+            // ]
             msgNode.put("role", msg.role());
+            // 1. 处理消息内容(纯文本或多模态消息)，为msgNode添加content字段或content数组
             appendMessageContent(msgNode, msg);
+            
+            // 2. 处理 reasoning_content（推理过程）
             if (shouldSendReasoningContentInRequestHistory()
-                    && "assistant".equals(msg.role())
-                    && msg.reasoningContent() != null
+                    && "assistant".equals(msg.role())   //只有 assistant 消息才有 reasoning
+                    && msg.reasoningContent() != null 
                     && !msg.reasoningContent().isBlank()) {
                 msgNode.put("reasoning_content", msg.reasoningContent());
             }
 
+            // 3. 处理 tool_calls（工具调用），assistant发起工具调用
             if (msg.toolCalls() != null && !msg.toolCalls().isEmpty()) {
+                // 3.1 在当前消息对象中创建 tool_calls 数组
                 ArrayNode toolCallsArray = msgNode.putArray("tool_calls");
                 for (ToolCall tc : msg.toolCalls()) {
                     ObjectNode tcNode = toolCallsArray.addObject();
@@ -236,12 +273,29 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     functionNode.put("arguments", tc.function().arguments());
                 }
             }
-
+        /**
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                    "id": "call_abc123",
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "arguments": "{\"path\":\"test.java\",\"content\":\"public class Test {}\"}"
+                    }
+                    }
+                ]
+            }
+            */
+            // 4. 处理 tool_call_id（工具调用ID）：当工具执行完成，需要把结果返回给 LLM，用于后续的推理
             if (msg.toolCallId() != null) {
                 msgNode.put("tool_call_id", msg.toolCallId());
             }
         }
 
+        // 5. 添加工具定义列表，用于 LLM 调用工具
         if (tools != null && !tools.isEmpty()) {
             ArrayNode toolsArray = requestBody.putArray("tools");
             for (Tool tool : tools) {
@@ -253,6 +307,28 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 functionNode.set("parameters", tool.parameters());
             }
         }
+        /**
+            {
+                "tools": [
+                    {
+                    "type": "function",
+                    "function": {
+                        "name": "write_file",
+                        "description": "写入文件内容（仅限项目根目录之内，单文件 5MB 上限）",
+                        "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "description": "文件路径"},
+                            "content": {"type": "string", "description": "文件内容"}
+                        },
+                        "required": ["path", "content"]
+                        }
+                    }
+                    }
+                ]
+            } 
+         */
+        // 6. 钩子方法和返回
         customizeRequestBody(requestBody);
         return requestBody;
     }
@@ -260,12 +336,19 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
     protected void customizeRequestBody(ObjectNode requestBody) {
     }
 
+    /**
+     * 处理消息内容(纯文本或多模态消息)
+     * @param msgNode 消息节点，用于存储处理后的内容
+     * @param msg 消息对象，包含原始内容和可能的多模态内容
+     */
     private void appendMessageContent(ObjectNode msgNode, Message msg) {
+        // 处理纯文本消息
         if (!msg.hasContentParts()) {
             msgNode.put("content", msg.content());
             return;
         }
 
+        // 处理多模态消息
         ArrayNode contentArray = msgNode.putArray("content");
         for (LlmClient.ContentPart part : msg.contentParts()) {
             if (part == null) {
@@ -290,7 +373,8 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 imageUrlNode.put("url", imageUrl);
             }
         }
-
+        
+        // 降级处理，将所有内容转换为纯文本格式
         if (contentArray.isEmpty()) {
             msgNode.put("content", msg.content());
         }
