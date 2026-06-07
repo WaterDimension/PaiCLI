@@ -107,6 +107,8 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         // BufferedSource 是 OkHttp 提供的缓冲输入流，用于高效读取响应体
         // readUtf8Line() 读取 UTF-8 编码的行，直到遇到换行符或文件结束
             BufferedSource source = responseBodyObj.source();
+
+            // 初始化累加变量
             String role = "assistant";
             StringBuilder content = new StringBuilder();  // 累加完整的回复文本
             StringBuilder reasoning = new StringBuilder();  // 累加推理过程
@@ -115,6 +117,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
             int outputTokens = 0;
             int cachedInputTokens = 0;
 
+            // 逐行解析 SSE 流，直到遇到 [DONE] 标志或流结束
             while (!source.exhausted()) {   // 检查流是否读完
                 String line = source.readUtf8Line(); // 读取一行 UTF-8 文本（遇到 \n 停止）
                 if (line == null) {
@@ -126,6 +129,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     continue;
                 }
 
+                // 检查是否是 SSE 数据行
                 String payload = trimmed.substring("data:".length()).trim();
                 if (payload.isEmpty()) {
                     continue;
@@ -134,12 +138,13 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     break;
                 }
 
-                JsonNode root = mapper.readTree(payload);
-                JsonNode usage = root.path("usage");
+                // 解析 JSON 并提取token统计
+                JsonNode root = mapper.readTree(payload);  // 解析 JSON 字符串为 JsonNode 对象
+                JsonNode usage = root.path("usage");     // 获取 "usage" 字段
                 if (!usage.isMissingNode()) {
-                    inputTokens = usage.path("prompt_tokens").asInt(inputTokens);
-                    outputTokens = usage.path("completion_tokens").asInt(outputTokens);
-                    cachedInputTokens = parseCachedInputTokens(usage, cachedInputTokens);
+                    inputTokens = usage.path("prompt_tokens").asInt(inputTokens);   // 输入token数
+                    outputTokens = usage.path("completion_tokens").asInt(outputTokens);  // 输出token数
+                    cachedInputTokens = parseCachedInputTokens(usage, cachedInputTokens); // 缓存命中token数
                 }
 
                 JsonNode choices = root.path("choices");
@@ -161,6 +166,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     role = deltaRole;
                 }
 
+                // 提取 reasoning、content 和 tool_calls
                 String reasoningDelta = extractReasoningDelta(delta);
                 if (!reasoningDelta.isEmpty()) {
                     reasoning.append(reasoningDelta);
@@ -214,6 +220,12 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         return "";
     }
 
+    /**
+     * 解析缓存命中token数
+     * @param usage 包含缓存命中token数的 JSON 节点
+     * @param fallback 缓存命中token数的默认值，用于处理 JSON 节点缺失或为空的情况
+     * @return 缓存命中token数的整数表示
+     */
     private int parseCachedInputTokens(JsonNode usage, int fallback) {
         int cached = usage.path("cached_tokens").asInt(fallback);
         cached = usage.path("prompt_cache_hit_tokens").asInt(cached);
@@ -391,9 +403,14 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         return null;
     }
 
+    /**
+     * 合并工具调用增量数据
+     * @param accumulators
+     * @param toolCallsNode
+     */
     private void mergeToolCallDeltas(List<ToolCallAccumulator> accumulators, JsonNode toolCallsNode) {
         if (toolCallsNode == null || !toolCallsNode.isArray()) {
-            return;
+            return;  // 本帧没有 tool_calls，直接返回
         }
 
         for (JsonNode tc : toolCallsNode) {

@@ -207,11 +207,23 @@ public interface LlmClient {
     interface StreamListener {
         StreamListener NO_OP = new StreamListener() {};
 
+        // 收到思考过程的增量内容时回调，delta 可能是部分文本、部分推理内容或部分工具调用信息
         default void onReasoningDelta(String delta) {}
 
+        // 收到内容增量时回调，delta 可能是部分文本内容或部分工具调用信息
         default void onContentDelta(String delta) {}
     }
 
+    /**
+     * 聊天响应记录，包含角色、内容、推理内容、工具调用列表以及输入输出 token 数等信息
+     * @param role
+     * @param content
+     * @param reasoningContent
+     * @param toolCalls
+     * @param inputTokens
+     * @param outputTokens
+     * @param cachedInputTokens
+     */
     record ChatResponse(String role, String content, String reasoningContent, List<ToolCall> toolCalls,
                         int inputTokens, int outputTokens, int cachedInputTokens) {
         public ChatResponse(String role, String content, List<ToolCall> toolCalls,

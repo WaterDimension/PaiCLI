@@ -148,7 +148,7 @@ class AbstractOpenAiCompatibleClientImageInputTest {
                             data: [DONE]
 
                             """));
-            DeepSeekClient client = new DeepSeekClient("test-key", "deepseek-v4-pro",
+            DeepSeekClient client = new DeepSeekClient("test-key", "deepseek-v4-flash",
                     server.url("/chat/completions").toString());
 
             client.chat(List.of(LlmClient.Message.assistant(
