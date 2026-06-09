@@ -70,7 +70,7 @@ public class Agent {
         this.toolRegistry.setCurrentModel(llmClient.getProviderName(), llmClient.getModelName());
         this.memoryManager.setProjectPath(this.toolRegistry.getProjectPath());
         this.toolRegistry.setScopedMemorySaver(memoryManager::storeFact);
-        conversationHistory.add(LlmClient.Message.system(buildSystemPrompt("")));
+        conversationHistory.add(LlmClient.Message.system(buildSystemPrompt("")));  // 对 Agent 来说， conversationHistory 就是每次发给 LLM 的上下文
     }
 
     public void setLlmClient(LlmClient llmClient) {
@@ -133,6 +133,7 @@ public class Agent {
 
         // 添加用户输入到历史（如有 skill body 注入，前置到原文之前）
         String userMessageContent = prependSkillBodies(userInput);
+
         conversationHistory.add(ImageReferenceParser.userMessage(
                 userMessageContent,
                 Path.of(toolRegistry.getProjectPath())));
@@ -147,6 +148,7 @@ public class Agent {
         // 主退出条件 = LLM 自己决定（不再调用工具就返回）；
         // budget 仅在 token 用尽 / 检测到死循环 / 超出硬轮数时兜底。
         while (true) {
+            // 1. 检查取消状态
             if (CancellationContext.isCancelled()) {
                 log.info("ReAct run cancelled before iteration");
                 pushStatus(budget, startNanos, "idle");
@@ -155,11 +157,15 @@ public class Agent {
             // 调 LLM 前评估 conversationHistory 是否接近 window 上限；超阈值就把早期消息压缩成摘要。
             // 这是与第 3 期 Memory 短期记忆压缩并行的另一道压缩——后者只压 shortTermMemory，
             // 真正决定下一轮 LLM input token 的是这里。
+
+            // 2.上下文压缩
             injectPendingLspDiagnostics();
             maybeCompactHistory();
+
+            // 3.调用AgentBudget检查死循环
             AgentBudget.ExitReason exitReason = budget.check();
             if (exitReason != AgentBudget.ExitReason.WITHIN_BUDGET) {
-                String description = budget.describeExit(exitReason);
+                String description = budget.describeExit(exitReason);   //打印报错原因(token 超预算 / 疑似死循环 / 超出最大轮数)
                 log.warn("ReAct run exhausted budget: reason={}, iteration={}, tokens={}/{}",
                         exitReason, budget.iteration(),
                         budget.totalInputTokens() + budget.totalOutputTokens(), budget.tokenBudget());
@@ -167,19 +173,37 @@ public class Agent {
                 return "❌ " + description;
             }
 
+
+            // 4.进入新一轮
             int iteration = budget.beginIteration();
 
             try {
+                // 5. 获取工具定义(工具名、工具描述、参数 schema），传给 LLM 让它决定要不要调用工具、调用哪个工具、传什么参数
                 List<LlmClient.Tool> toolDefinitions = toolRegistry.getToolDefinitions();
                 logRequestContext("react iteration=" + iteration, toolDefinitions);
                 streamRenderer.beginThinking();
-                // 调用 LLM
+                /*
+                        conversationHistory =
+                          system prompt,
+                          user: 帮我看看 pom.xml 里项目名是什么,
+                          assistant: tool_calls=[
+                            call_1 -> read_file {"path":"pom.xml"}
+                          ],
+                          tool:
+                            tool_call_id=call_1
+                            content=<project>...<artifactId>paicli</artifactId>...</project>
+]
+                 */
+                // 6. 调用 LLM, 同时把 (对话上下文、工具列表定义) 发给LLM
                 LlmClient.ChatResponse response = llmClient.chat(
                         conversationHistory,
                         toolDefinitions,
                         streamRenderer
-                );
+                );    //返回工具调用的参数格式 / 直接回答
+
                 LlmTraceLogger.logReasoning(log, "react iteration=" + iteration, llmClient, response.reasoningContent());
+
+                // 7.llmClient.chat(...) 可能耗时比较久，，用户可能按了 ESC 取消
                 if (CancellationContext.isCancelled()) {
                     log.info("ReAct run cancelled after LLM response");
                     streamRenderer.finish();
@@ -189,17 +213,24 @@ public class Agent {
 
                 budget.recordTokens(response.inputTokens(), response.outputTokens(), response.cachedInputTokens());
 
-                // 如果有工具调用
+                // 8. 有工具调用时：保存 assistant 消息
                 if (response.hasToolCalls()) {
                     appendReasoning(reasoningTranscript, response.reasoningContent());
                     log.info("LLM requested {} tool call(s) in iteration {}", response.toolCalls().size(), iteration);
-                    budget.recordToolCalls(response.toolCalls());
-                    // 添加助手消息（包含工具调用）
+                    budget.recordToolCalls(response.toolCalls());  // 记录本轮调用工具的签名
+                    // 往历史里加一条 assistant 消息（包含工具调用）
                     conversationHistory.add(LlmClient.Message.assistant(
-                            response.reasoningContent(),
-                            response.content(),
-                            response.toolCalls()
+                            response.reasoningContent(),   // 推理内容
+                            response.content(),         // llm回复的文本
+                            response.toolCalls()    //tool_calls（名字、参数、id）
                     ));
+                    /*
+                        assistant:
+                          tool_calls:
+                            - id: call_abc123
+                              name: read_file
+                              arguments: {"path":"pom.xml"}
+                     */
 
                     // 在工具执行前就 flush 本轮流式渲染器，避免 TerminalMarkdownRenderer
                     // 内部 pending 缓冲区（仅按换行 flush）里的文本被 HITL 提示"跨过"
@@ -207,11 +238,19 @@ public class Agent {
                     streamRenderer.resetBetweenIterations();
                     renderer().appendToolCalls(response.toolCalls());
 
+                // 9. ToolRegistry执行工具调用
                     List<ToolExecutionResult> toolResults = executeToolCalls(response.toolCalls(), iteration);
+
+                // 10. 把工具调用结果存入记忆，并添加工具结果消息到 conversationHistory 里，让下一轮 LLM 输入时能看到工具结果
                     for (ToolExecutionResult toolResult : toolResults) {
                         memoryManager.addToolResult(toolResult.name(), toolResult.result());
-                        conversationHistory.add(LlmClient.Message.tool(toolResult.id(), toolResult.result()));
+                        conversationHistory.add(LlmClient.Message.tool(toolResult.id(), toolResult.result())); // 工具结果的消息加入历史。(下一轮LLM请求的上下文)
                     }
+                    /*
+                        role=tool
+                        tool_call_id=call_1
+                        content（工具调用结果）
+                     */
                     appendImageToolMessages(toolResults);
                     pushStatus(budget, startNanos, "running");
 
@@ -538,6 +577,11 @@ public class Agent {
         return Math.max(0L, messageTokens + estimateToolsSchemaTokens());
     }
 
+    /**
+     * 记录当前上下文的 token 占用情况
+     * @param scope
+     * @param tools
+     */
     private void logRequestContext(String scope, List<LlmClient.Tool> tools) {
         if (!log.isInfoEnabled()) {
             return;

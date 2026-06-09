@@ -1063,6 +1063,7 @@ public class ToolRegistry {
 
     /**
      * 把当前注册表里的工具 tools，转换成 LLM 客户端需要的工具定义列表返回
+     * @return tool名字、描述、参数定义（JSON Schema）等信息的集合
      */
     public List<com.paicli.llm.LlmClient.Tool> getToolDefinitions() {
         return tools.values().stream()
@@ -1247,7 +1248,7 @@ public class ToolRegistry {
     }
 
     /**
-     * 并行执行同一轮 LLM 返回的多个工具调用。
+     * (并行) 执行同一轮 LLM 返回的多个工具调用。
      *
      * 结果按传入顺序返回，调用方可以安全地按原 tool_call 顺序回灌消息历史。
      * 如果某个工具超过批次超时仍未返回，会取消任务并返回超时结果；已完成工具不受影响。
@@ -1441,6 +1442,16 @@ public class ToolRegistry {
 
     public record ToolInvocation(String id, String name, String argumentsJson) {}
 
+    /**
+     * 工具执行结果记录
+     * @param id 工具调用 ID
+     * @param name 工具名称
+     * @param argumentsJson 工具调用参数 JSON 字符串
+     * @param result 工具执行结果文本
+     * @param elapsedMillis 工具执行耗时（毫秒）
+     * @param timedOut 工具是否超时执行
+     * @param imageParts 工具执行结果中的图片内容Parts
+     */
     public record ToolExecutionResult(String id, String name, String argumentsJson,
                                       String result, long elapsedMillis, boolean timedOut,
                                       List<com.paicli.llm.LlmClient.ContentPart> imageParts) {
