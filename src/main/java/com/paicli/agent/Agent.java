@@ -334,6 +334,9 @@ public class Agent {
                 .build());
     }
 
+    /**
+     * 如果对话历史超过上下文窗口，压缩为摘要后继续
+     */
     private void maybeCompactHistory() {
         if (historyCompactor == null) return;
         int trigger = memoryManager.getContextProfile().compressionTriggerTokens();

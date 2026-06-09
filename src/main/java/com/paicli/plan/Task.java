@@ -9,7 +9,7 @@ public class Task {
     private final String id;
     private final String description;
     private final TaskType type;
-    private volatile TaskStatus status;
+    private volatile TaskStatus status;   // volatile 保证多线程可见性
     private volatile String result;
     private volatile String error;
     private final List<String> dependencies;  // 依赖的其他任务ID
@@ -55,6 +55,7 @@ public class Task {
     public TaskStatus getStatus() { return status; }
     public String getResult() { return result; }
     public String getError() { return error; }
+    // 返回的是新创建的副本，防御性拷贝：外部拿到列表后不会改变Task内部的列表，保证了封装性
     public List<String> getDependencies() { return new ArrayList<>(dependencies); }
     public List<String> getDependents() { return new ArrayList<>(dependents); }
     public long getStartTime() { return startTime; }
@@ -65,18 +66,26 @@ public class Task {
     public void setResult(String result) { this.result = result; }
     public void setError(String error) { this.error = error; }
 
+    // 1.关系添加
+    // 1.1添加一个依赖此任务的任务ID（即这个任务完成后可以触发那些任务）
     public void addDependent(String taskId) {
         if (!dependents.contains(taskId)) {
             dependents.add(taskId);
         }
     }
 
+    // 1.2添加一个此任务依赖的任务ID（即这个任务需要等待哪些任务完成才能执行）
     public void addDependency(String taskId) {
         if (!dependencies.contains(taskId)) {
             dependencies.add(taskId);
         }
     }
 
+    // 状态标记方法(core)
+    /*
+        记录时间戳有两个用途：
+            一是统计执行耗时，二是分析任务瓶颈。如果某个任务总是耗时很长，可能需要优化或者拆分。
+     */
     public void markStarted() {
         this.status = TaskStatus.RUNNING;
         this.startTime = System.currentTimeMillis();
@@ -103,8 +112,8 @@ public class Task {
      * 获取执行耗时（毫秒）
      */
     public long getDuration() {
-        if (startTime == 0) return 0;
-        if (endTime == 0) return System.currentTimeMillis() - startTime;
+        if (startTime == 0) return 0;  //从未执行过
+        if (endTime == 0) return System.currentTimeMillis() - startTime;  //正在执行中，计算到当前的耗时
         return endTime - startTime;
     }
 
@@ -113,6 +122,8 @@ public class Task {
      */
     public boolean isExecutable(Map<String, Task> allTasks) {
         if (status != TaskStatus.PENDING) return false;
+
+        // 检查所有依赖的任务是否都已完成
         for (String depId : dependencies) {
             Task dep = allTasks.get(depId);
             if (dep == null || dep.getStatus() != TaskStatus.COMPLETED) {
