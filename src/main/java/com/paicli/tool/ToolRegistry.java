@@ -230,7 +230,9 @@ public class ToolRegistry {
      */
     private void registerFileTools() {
         // read_file 工具
-        tools.put("read_file", new Tool(
+        tools.put("read_file", 
+        // 工具定义
+            new Tool(
                 "read_file",
                 "读取文件内容（仅限项目根目录之内）；可用 offset/limit 按行读取，避免把大文件整段塞进上下文",
                 createParameters(
@@ -300,8 +302,10 @@ public class ToolRegistry {
                 "列出目录内容（仅限项目根目录之内）",
                 createParameters(new Param("path", "string", "目录路径", true)),
                 args -> {
+                    // args 是 Map<String, String>，key 是参数名，value 是参数值
                     Path safe = pathGuard.resolveSafe(args.get("path"));
                     try {
+                         // 调用 Java 标准库列出文件
                         File[] files = safe.toFile().listFiles();
                         if (files == null) {
                             return "目录为空或不存在";
@@ -348,15 +352,26 @@ public class ToolRegistry {
         ));
     }
 
+    /**
+     * 读取文件内容（工具调用）
+     * @param file 文件路径
+     * @param args 参数映射
+     * @return 文件内容或错误信息
+     * @throws IOException
+     */
     private String readFileForTool(Path file, Map<String, String> args) throws IOException {
         if (!Files.isRegularFile(file)) {
             return "读取文件失败: 不是普通文件";
         }
+
+        // 检查是否需要按行读取
         boolean ranged = args.containsKey("offset") || args.containsKey("limit");
         if (!ranged) {
+            // 读取全文
             return "文件内容:\n" + Files.readString(file);
         }
 
+        // 按行读取
         int offset = Math.max(1, parseInt(args.get("offset"), 1));
         int limit = Math.max(1, Math.min(parseInt(args.get("limit"), 200), MAX_READ_FILE_LINES));
         List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
@@ -517,7 +532,7 @@ public class ToolRegistry {
     private void registerShellTools() {
         tools.put("execute_command", new Tool(
                 "execute_command",
-                "在当前项目目录中执行短时 Shell 命令（默认 60 秒超时，不允许全盘扫描）",
+                "在项目根目录执行短时 Shell 命令，如 ls、mvn compile；不要用来读取文件内容，读文件请使用 read_file（默认 60 秒超时，不允许全盘扫描）",
                 createParameters(new Param("command", "string", "要执行的命令", true)),
                 args -> executeCommand(args.get("command"))
         ));
@@ -1047,7 +1062,7 @@ public class ToolRegistry {
     */
 
     /**
-     * 获取所有工具定义（用于LLM）
+     * 把当前注册表里的工具 tools，转换成 LLM 客户端需要的工具定义列表返回
      */
     public List<com.paicli.llm.LlmClient.Tool> getToolDefinitions() {
         return tools.values().stream()
@@ -1065,15 +1080,25 @@ public class ToolRegistry {
     public synchronized void registerMcpTool(McpToolDescriptor descriptor, Function<String, String> invoker) {
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(invoker, "invoker");
+        // 注册工具输出，将字符串结果转换为 ToolOutput
         registerMcpToolOutput(descriptor, args -> ToolOutput.text(invoker.apply(args)));
     }
 
     public synchronized void registerMcpToolOutput(McpToolDescriptor descriptor, Function<String, ToolOutput> invoker) {
+        // 1. 参数校验
         Objects.requireNonNull(descriptor, "descriptor");
         Objects.requireNonNull(invoker, "invoker");
+
+        // 2. 获取工具的命名空间名称
         String toolName = descriptor.namespacedName();
+
+        // 3. 创建注册工具实例
         McpRegisteredTool registered = new McpRegisteredTool(descriptor, invoker);
+
+        // 4. 存入工具缓存
         mcpTools.put(toolName, registered);
+
+        // 5. 同时在 tools Map 中注册一个"壳"工具（给 LLM 看的定义）
         tools.put(toolName, new Tool(
                 toolName,
                 mcpDescription(descriptor),
@@ -1115,7 +1140,7 @@ public class ToolRegistry {
     }
 
     /**
-     * 执行工具调用
+     * Agent执行工具调用
      *
      * 危险工具（write_file / execute_command / create_project）会写一行审计：
      * - 策略拦截（PathGuard / CommandGuard / 文件大小上限）→ deny
@@ -1134,6 +1159,7 @@ public class ToolRegistry {
     }
 
     protected ToolOutput doExecuteTool(String name, String argumentsJson) {
+        // a. 从 tools Map 取出 Tool 对象
         if (CancellationContext.isCancelled()) {
             return ToolOutput.text("用户取消了此次工具调用");
         }
@@ -1166,11 +1192,19 @@ public class ToolRegistry {
                 }
                 return output;
             }
-
+            // b. 解析 JSON 参数成对象
             JsonNode args = mapper.readTree(argumentsJson);
             Map<String, String> argMap = new HashMap<>();
-            args.fields().forEachRemaining(entry ->
-                    argMap.put(entry.getKey(), entry.getValue().asText()));
+            // 把 JSON 解析后的 JsonNode 对象转成 Map<String, String>
+            args.fields()              // 1. 取出 JsonNode 的所有字段（key-value 对）
+                .forEachRemaining(     // 2. 遍历每个字段
+                    entry ->           // 3. entry 是 Map.Entry<String, JsonNode>
+                        argMap.put(    // 4. 放入 HashMap
+                            entry.getKey(),          // key: "path"（参数名）
+                            entry.getValue().asText()// value: "pom.xml"（参数值转成字符串）
+                         )
+    );
+            // c. 执行工具
             String result = tool.executor().execute(argMap);
             if (shouldAudit) {
                 auditLog.record(AuditLog.AuditEntry.allow(name, argumentsJson, elapsedMillis(start), auditMetadata));
@@ -1336,11 +1370,12 @@ public class ToolRegistry {
             Process runningProcess = process;
             Future<String> outputFuture = outputReaderExecutor.submit(() -> readProcessOutput(runningProcess));
 
+            //超时逻辑
             boolean finished = process.waitFor(commandTimeoutSeconds, TimeUnit.SECONDS);
             if (!finished) {
-                process.destroyForcibly();
-                process.waitFor(2, TimeUnit.SECONDS);
-                outputFuture.cancel(true);
+                process.destroyForcibly();  //强制杀掉进程
+                process.waitFor(2, TimeUnit.SECONDS);  //等待进程结束
+                outputFuture.cancel(true);  // 取消读取线程，避免阻塞
                 return "命令执行超时（" + commandTimeoutSeconds + "秒），已强制终止";
             }
 

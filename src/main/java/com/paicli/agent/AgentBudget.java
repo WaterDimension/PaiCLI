@@ -33,20 +33,20 @@ import java.util.Locale;
 public class AgentBudget {
 
     public enum ExitReason {
-        WITHIN_BUDGET,
-        TOKEN_BUDGET_EXCEEDED,
-        STAGNATION_DETECTED,
-        HARD_ITERATION_LIMIT
+        WITHIN_BUDGET,    // 还没触发兜底，可以继续
+        TOKEN_BUDGET_EXCEEDED, //token 超预算了
+        STAGNATION_DETECTED,  //疑似死循环
+        HARD_ITERATION_LIMIT  //达到最大轮数
     }
 
-    private static final int DEFAULT_STAGNATION_WINDOW = 3;
-    private static final int DEFAULT_HARD_MAX_ITERATIONS = 50;
+    private static final int DEFAULT_STAGNATION_WINDOW = 3;  //工具调用最大次数
+    private static final int DEFAULT_HARD_MAX_ITERATIONS = 50;  //agent 最大迭代轮数
 
-    private final int tokenBudget;
-    private final int stagnationWindow;
+    private final int tokenBudget;  //token 硬预算
+    private final int stagnationWindow;  // 连续多少轮重复才算停滞
     private final int hardMaxIterations;
 
-    private final Deque<String> recentToolSignatures = new ArrayDeque<>();
+    private final Deque<String> recentToolSignatures = new ArrayDeque<>();  // 滑动窗口：最近几轮工具调用的"工具名 + 参数"签名，用于停滞检测
     private int iteration;
     private int totalInputTokens;
     private int totalOutputTokens;
@@ -72,14 +72,19 @@ public class AgentBudget {
         return fromLlmClient(null);
     }
 
+    /**
+     *  创建预算对象
+     * @param llmClient
+     * @return
+     */
     public static AgentBudget fromLlmClient(LlmClient llmClient) {
         // ContextProfile 仍按 80% × window 计算 agentTokenBudget，用于 /context 与 token stats 的"软提示"显示；
         // 但 AgentBudget 的硬限默认走 Integer.MAX_VALUE，避免长上下文 + 套餐用户被预算墙卡住。
         // 显式 -Dpaicli.react.token.budget=N 仍可启用硬预算，覆盖默认。
         return new AgentBudget(
-                readIntProperty("paicli.react.token.budget", Integer.MAX_VALUE),
-                readIntProperty("paicli.react.stagnation.window", DEFAULT_STAGNATION_WINDOW),
-                readIntProperty("paicli.react.hard.max.iterations", DEFAULT_HARD_MAX_ITERATIONS)
+                readIntProperty("paicli.react.token.budget", Integer.MAX_VALUE),  // tokenBudget
+                readIntProperty("paicli.react.stagnation.window", DEFAULT_STAGNATION_WINDOW),  // stagnationWindow
+                readIntProperty("paicli.react.hard.max.iterations", DEFAULT_HARD_MAX_ITERATIONS) //hardMaxIterations
         );
     }
 
@@ -88,6 +93,7 @@ public class AgentBudget {
         return ++iteration;
     }
 
+    /** 记录本轮的token消耗（以及可选的 cached input token 数），累计到总量中。*/
     public void recordTokens(int inputTokens, int outputTokens) {
         recordTokens(inputTokens, outputTokens, 0);
     }
@@ -99,30 +105,41 @@ public class AgentBudget {
     }
 
     /**
-     * 记录本轮工具调用签名并判断是否进入停滞。
+     * 记录本轮工具调用签名并判断： 是否重复调用工具。
      *
      * 停滞条件：最近 stagnationWindow 轮的"工具名 + 参数"完全相同；
      * 一旦判定为停滞，状态会保持，后续 {@link #check()} 会返回 STAGNATION_DETECTED。
      */
     public void recordToolCalls(List<LlmClient.ToolCall> toolCalls) {
+        // 1. 如果本轮没有工具调用，清空最近工具记录
         if (toolCalls == null || toolCalls.isEmpty()) {
             recentToolSignatures.clear();
             return;
         }
+        // 2. 如果有工具调用，把本轮工具调用转成 signature
         String signature = signatureOf(toolCalls);
-        recentToolSignatures.addLast(signature);
+        recentToolSignatures.addLast(signature);  // 加入滑动窗口
+
+        // 3.队列只保留最近 stagnationWindow 个
         while (recentToolSignatures.size() > stagnationWindow) {
             recentToolSignatures.removeFirst();
         }
+
+        // 4. 如果最近 N 个 signature 完全一样，标记 stagnant = true
         if (recentToolSignatures.size() == stagnationWindow) {
             String first = recentToolSignatures.peekFirst();
             stagnant = recentToolSignatures.stream().allMatch(sig -> sig.equals(first));
         }
     }
 
+    /**
+     * 1.先查工具是否重复调用
+     * 2.再查token是否超预算
+     * 4.都没有继续运行
+     */
     public ExitReason check() {
         if (stagnant) {
-            return ExitReason.STAGNATION_DETECTED;
+            return ExitReason.STAGNATION_DETECTED;  //优先触发
         }
         if (totalInputTokens + totalOutputTokens >= tokenBudget) {
             return ExitReason.TOKEN_BUDGET_EXCEEDED;
@@ -161,6 +178,7 @@ public class AgentBudget {
         return stagnationWindow;
     }
 
+    // 生成用户可读提示
     public String describeExit(ExitReason reason) {
         return switch (reason) {
             case WITHIN_BUDGET -> "未触发兜底条件";
@@ -175,19 +193,30 @@ public class AgentBudget {
         };
     }
 
+    /**
+     * 把一轮中的工具调用列表转换成一个字符串签名，用于停滞检测。
+     * @param toolCalls
+     * @return
+     */
     private static String signatureOf(List<LlmClient.ToolCall> toolCalls) {
         StringBuilder sb = new StringBuilder();
         for (LlmClient.ToolCall tc : toolCalls) {
-            sb.append(tc.function().name()).append('|').append(tc.function().arguments()).append(';');
+            sb.append(tc.function().name()).append('|').append(tc.function().arguments()).append(';');  //eg: read_file|{"path":"src/pom.xml"};
         }
         return sb.toString();
     }
 
+
     private static int readIntProperty(String key, int defaultValue) {
+        // 1. 获取：尝试从 JVM 系统属性中获取该 key 的值
         String raw = System.getProperty(key);
+
+        // 2. 判空：如果值不存在 (null) 或为空字符串 ("")，直接返回默认值
         if (raw == null || raw.isBlank()) {
             return defaultValue;
         }
+
+        // 3. 转换与校验
         try {
             int parsed = Integer.parseInt(raw.trim());
             return parsed > 0 ? parsed : defaultValue;
