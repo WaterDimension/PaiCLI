@@ -51,7 +51,7 @@ public class ExecutionPlan {
         for (String depId : task.getDependencies()) {
             Task dep = tasks.get(depId);
             if (dep != null) {
-                dep.addDependent(task.getId());
+                dep.addDependent(task.getId());   //告知被依赖task它的依赖者, 形成双向关系，方便后续分析和执行调度
             }
         }
     }
@@ -92,19 +92,19 @@ public class ExecutionPlan {
      * 计算拓扑排序执行顺序
      */
     public boolean computeExecutionOrder() {
-        executionOrder.clear();
-        Set<String> visited = new HashSet<>();
-        Set<String> visiting = new HashSet<>();
+        executionOrder.clear();    //清空list执行顺序列表
+        Set<String> visited = new HashSet<>();  //已处理
+        Set<String> visiting = new HashSet<>(); //正在处理（检测环）
 
+        // 遍历所有任务，对未处理的任务调用dfs递归的拓扑排序。
         for (Task task : tasks.values()) {
             if (!visited.contains(task.getId())) {
-                if (!topologicalSort(task, visited, visiting)) {
+                if (!topologicalSort(task, visited, visiting)) {   // dfs拓扑排序，如果返回false说明有环，无法排序。
                     return false;  // 有环
                 }
             }
         }
-
-        return true;
+        return true;  // 所有任务排序完成
     }
 
     private boolean topologicalSort(Task task, Set<String> visited, Set<String> visiting) {
@@ -114,11 +114,12 @@ public class ExecutionPlan {
             return false;  // 有环
         }
         if (visited.contains(id)) {
-            return true;
+            return true;  // 已经处理过了
         }
 
         visiting.add(id);
 
+        // 递归处理依赖的任务，确保 依赖的任务的执行顺序 在当前任务之前。
         for (String depId : task.getDependencies()) {
             Task dep = tasks.get(depId);
             if (dep != null) {
@@ -128,9 +129,9 @@ public class ExecutionPlan {
             }
         }
 
-        visiting.remove(id);
+        visiting.remove(id);  // 恢复现场
         visited.add(id);
-        executionOrder.add(id);
+        executionOrder.add(id);  // 排好序的List
         return true;
     }
 
