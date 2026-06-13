@@ -77,7 +77,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
             - StreamListener 是一个接口，定义了流式输出回调方法
             - NO_OP 是空实现（什么都不做），用于测试或不需要实时显示的场景
             作用 ：防止 listener 为 null 导致后续 NPE（空指针异常）
-        */ 
+        */
         StreamListener streamListener = listener == null ? StreamListener.NO_OP : listener;
         RequestBody body = RequestBody.create(
                 buildRequestBody(messages, tools).toString(),
@@ -85,16 +85,17 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         );
 
         // 2. 构建并发送 HTTP 请求
-        Request request = new Request.Builder()
+        Request.Builder request = new Request.Builder()
                 .url(getApiUrl())
                 .header("Authorization", "Bearer " + getApiKey())
                 .header("Content-Type", "application/json")
-                .post(body)
-                .build();
+                .post(body);
+        customizeRequest(request);
+        Request builtRequest = request.build();
 
         // 3. 执行请求并处理响应
         // newCall(request) 创建一个调用对象（Call）；execute() 同步执行 请求（阻塞当前线程直到收到响应）
-        try (Response response = SHARED_HTTP_CLIENT.newCall(request).execute()) {
+        try (Response response = httpClient().newCall(builtRequest).execute()) {
             ResponseBody responseBodyObj = response.body();
             if (!response.isSuccessful()) {
                 String errorBody = responseBodyObj != null ? responseBodyObj.string() : "无响应体";
@@ -107,12 +108,11 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
         // BufferedSource 是 OkHttp 提供的缓冲输入流，用于高效读取响应体
         // readUtf8Line() 读取 UTF-8 编码的行，直到遇到换行符或文件结束
             BufferedSource source = responseBodyObj.source();
-
             // 初始化累加变量
             String role = "assistant";
-            StringBuilder content = new StringBuilder();  // 累加完整的回复文本
-            StringBuilder reasoning = new StringBuilder();  // 累加推理过程
-            List<ToolCallAccumulator> toolAccumulators = new ArrayList<>(); //累加工具调用（可能分多帧发送）
+            StringBuilder content = new StringBuilder();
+            StringBuilder reasoning = new StringBuilder();
+            List<ToolCallAccumulator> toolAccumulators = new ArrayList<>();
             int inputTokens = 0;
             int outputTokens = 0;
             int cachedInputTokens = 0;
@@ -129,7 +129,6 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     continue;
                 }
 
-                // 检查是否是 SSE 数据行
                 String payload = trimmed.substring("data:".length()).trim();
                 if (payload.isEmpty()) {
                     continue;
@@ -139,8 +138,12 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 }
 
                 // 解析 JSON 并提取token统计
-                JsonNode root = mapper.readTree(payload);  // 解析 JSON 字符串为 JsonNode 对象
-                JsonNode usage = root.path("usage");     // 获取 "usage" 字段
+                JsonNode root = mapper.readTree(payload);
+                JsonNode error = root.path("error");
+                if (!error.isMissingNode() && !error.isNull()) {
+                    throw new IOException("API请求失败: " + formatStreamingError(error));
+                }
+                JsonNode usage = root.path("usage");
                 if (!usage.isMissingNode()) {
                     inputTokens = usage.path("prompt_tokens").asInt(inputTokens);   // 输入token数
                     outputTokens = usage.path("completion_tokens").asInt(outputTokens);  // 输出token数
@@ -166,7 +169,6 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     role = deltaRole;
                 }
 
-                // 提取 reasoning、content 和 tool_calls
                 String reasoningDelta = extractReasoningDelta(delta);
                 if (!reasoningDelta.isEmpty()) {
                     reasoning.append(reasoningDelta);
@@ -182,16 +184,33 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 mergeToolCallDeltas(toolAccumulators, delta.path("tool_calls"));
             }
 
+            List<ToolCall> toolCalls = buildToolCalls(toolAccumulators);
+            if (content.isEmpty() && reasoning.isEmpty() && (toolCalls == null || toolCalls.isEmpty())) {
+                throw new IOException("API返回空内容，请检查 provider/model 配置或该模型是否支持当前请求参数");
+            }
+
             return new ChatResponse(
                     role,
                     content.toString(),
                     reasoning.toString(),
-                    buildToolCalls(toolAccumulators),
+                    toolCalls,
                     inputTokens,
                     outputTokens,
                     cachedInputTokens
             );
         }
+    }
+
+    private String formatStreamingError(JsonNode error) {
+        String message = error.path("message").asText("");
+        String code = error.path("code").asText("");
+        if (!code.isEmpty() && !message.isEmpty()) {
+            return code + " - " + message;
+        }
+        if (!message.isEmpty()) {
+            return message;
+        }
+        return error.toString();
     }
 
     private String extractReasoningDelta(JsonNode delta) {
@@ -263,11 +282,11 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
             msgNode.put("role", msg.role());
             // 1. 处理消息内容(纯文本或多模态消息)，为msgNode添加content字段或content数组
             appendMessageContent(msgNode, msg);
-            
+
             // 2. 处理 reasoning_content（推理过程）
             if (shouldSendReasoningContentInRequestHistory()
                     && "assistant".equals(msg.role())   //只有 assistant 消息才有 reasoning
-                    && msg.reasoningContent() != null 
+                    && msg.reasoningContent() != null
                     && !msg.reasoningContent().isBlank()) {
                 msgNode.put("reasoning_content", msg.reasoningContent());
             }
@@ -338,7 +357,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                     }
                     }
                 ]
-            } 
+            }
          */
         // 6. 钩子方法和返回
         customizeRequestBody(requestBody);
@@ -346,6 +365,13 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
     }
 
     protected void customizeRequestBody(ObjectNode requestBody) {
+    }
+
+    protected void customizeRequest(Request.Builder request) {
+    }
+
+    protected OkHttpClient httpClient() {
+        return SHARED_HTTP_CLIENT;
     }
 
     /**
@@ -385,7 +411,7 @@ public abstract class AbstractOpenAiCompatibleClient implements LlmClient {
                 imageUrlNode.put("url", imageUrl);
             }
         }
-        
+
         // 降级处理，将所有内容转换为纯文本格式
         if (contentArray.isEmpty()) {
             msgNode.put("content", msg.content());
