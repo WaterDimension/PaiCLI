@@ -27,7 +27,8 @@
 
 ```bash
 cp .env.example .env
-mvn clean package        # 默认跳过测试，优先产出可手工验收 jar
+ # 默认跳过测试，优先产出可手工验收 jar
+mvn clean package       
 java -jar target/paicli-1.0-SNAPSHOT.jar
 mvn test -Pquick          # 常规回归
 mvn test -Pphase16-smoke  # TUI 相关

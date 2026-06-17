@@ -75,14 +75,17 @@ public class MemoryManager {
      * 添加用户消息到短期记忆
      */
     public void addUserMessage(String content) {
+        // 1. 把用户输入包装成 MemoryEntry
         MemoryEntry entry = new MemoryEntry(
-                "user-" + UUID.randomUUID().toString().substring(0, 8),
-                content,
-                MemoryEntry.MemoryType.CONVERSATION,
-                Map.of("source", "user"),
-                MemoryEntry.estimateTokens(content)
+                "user-" + UUID.randomUUID().toString().substring(0, 8),  // 唯一 ID
+                content,                  // 用户输入内容
+                MemoryEntry.MemoryType.CONVERSATION,  // 类型：对话消息
+                Map.of("source", "user"), // 元数据：来源是用户
+                MemoryEntry.estimateTokens(content)   // 估算的 token 数
         );
+        // 2. 存入短期记忆
         shortTermMemory.store(entry);
+        // 3. 检查是否超出预算，超了则自动压缩
         compressIfNeeded();
     }
 

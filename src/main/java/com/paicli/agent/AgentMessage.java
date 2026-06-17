@@ -14,7 +14,7 @@ package com.paicli.agent;
 public record AgentMessage(
         String fromAgent,
         AgentRole fromRole,
-        String content,
+        String content,                    
         Type type
 ) {
     public enum Type {

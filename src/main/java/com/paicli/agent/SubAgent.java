@@ -61,7 +61,7 @@ public class SubAgent {
         this.toolRegistry.setCurrentModel(llmClient.getProviderName(), llmClient.getModelName());
         this.conversationHistory = new ArrayList<>();
         this.historyCompactor = new ConversationHistoryCompactor(llmClient);
-        this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));
+        this.conversationHistory.add(LlmClient.Message.system(getSystemPrompt()));  // 立即放入 system prompt到短期记忆
     }
 
     public void setExternalContextSupplier(Supplier<String> externalContextSupplier) {
@@ -80,6 +80,7 @@ public class SubAgent {
 
     /**
      * 根据角色获取系统提示词
+     * @return 
      */
     private String getSystemPrompt() {
         return promptAssembler.assemble(promptMode(), PromptContext.builder()
@@ -90,6 +91,8 @@ public class SubAgent {
                 .build());
     }
 
+    // 使用当前类的实例 this.role 来获取对应的 PromptMode
+    // 这样可以确保每个 SubAgent 都有自己独立的系统提示词和对话历史，
     private PromptMode promptMode() {
         return switch (role) {
             case PLANNER -> PromptMode.TEAM_PLANNER;
@@ -167,22 +170,25 @@ public class SubAgent {
     }
 
     /**
+     * 一个 ReAct 循环 （Reasoning + Acting），是子代理独立执行任务的核心
      * 执行任务并将流式输出写入指定 PrintStream。并发执行时为每个步骤传入独立的 PrintStream，
      * 避免多个 Agent 同时写入 System.out 造成输出交错。
      */
     public AgentMessage execute(AgentMessage task, PrintStream out) {
         log.info("[{}] executing task from {}: type={}", name, task.fromAgent(), task.type());
-        pruneHistoricalImagePayloads();
-        refreshSystemPrompt();
-        String taskContent = prependSkillBodies(task.content());
+        pruneHistoricalImagePayloads();   // ① 清理历史对话中的图片 base64 数据
+        refreshSystemPrompt();           // ② 刷新系统提示词（反映最新 skill/MCP/external context 状态）
+        String taskContent = prependSkillBodies(task.content());  // ③ 把已加载的技能内容前置到任务前面
 
         // 将任务注入对话
-        conversationHistory.add(ImageReferenceParser.userMessage(
+        conversationHistory.add(ImageReferenceParser.userMessage(  //初始化时已经根据role注入system prompt
                 taskContent,
-                Path.of(toolRegistry.getProjectPath())));
+                Path.of(toolRegistry.getProjectPath())));  // ④ 将任务转成 user message 加入对话历史
 
+        // ⑤ 初始化流渲染器，准备接收 LLM 输出
         SubAgentStreamRenderer streamRenderer = new SubAgentStreamRenderer(name, role, out);
 
+        // 预算控制器，跟踪本轮用了多少 token、多少轮迭代。防止子代理无限循环。
         AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
 
         // 与 Agent.java 对称：主退出条件 = LLM 自决，budget 仅在 token / 停滞 / 硬轮数兜底。
@@ -201,13 +207,18 @@ public class SubAgent {
 
             // 调 LLM 前评估 conversationHistory 是否接近 window 上限；超阈值压缩早期消息为摘要。
             injectPendingLspDiagnostics(out);
-            maybeCompactHistory(out);
+            maybeCompactHistory(out);  //检查 conversationHistory 是否接近 LLM 上下文窗口上限。如果快满了，调用 ConversationHistoryCompactor 把早期对话压缩成摘要，腾出空间。
 
+            // 调用 LLM 进行推理
             try {
                 LlmClient.ChatResponse response = llmClient.chat(
-                        conversationHistory,
+                        conversationHistory,        // 对话历史
+                        /*
+                            工具定义 ：只有 WORKER 角色才会传工具定义（ shouldUseTools() 检查 role == AgentRole.WORKER ）。
+                             PLANNER 和 REVIEWER 只做分析和输出，不调用工具。
+                        */
                         shouldUseTools() && llmClient.supportsTools() ? toolRegistry.getToolDefinitions() : null,
-                        streamRenderer
+                        streamRenderer  //流式回调 ：LLM 返回的内容增量会实时传给 streamRenderer ，展示在终端上。
                 );
                 LlmTraceLogger.logReasoning(log,
                         "sub-agent name=" + name + " role=" + role + " iteration=" + budget.iteration(),
@@ -216,10 +227,11 @@ public class SubAgent {
 
                 budget.recordTokens(response.inputTokens(), response.outputTokens(), response.cachedInputTokens());
 
+                // 工具调用分支
                 if (response.hasToolCalls()) {
                     budget.recordToolCalls(response.toolCalls());
-                    printToolCalls(out, response.toolCalls());
-                    conversationHistory.add(LlmClient.Message.assistant(
+                    printToolCalls(out, response.toolCalls());  // 打印工具调用信息到终端
+                    conversationHistory.add(LlmClient.Message.assistant(  // 把工具调用请求加入LLM上下文
                             response.reasoningContent(),
                             response.content(),
                             response.toolCalls()
@@ -227,13 +239,13 @@ public class SubAgent {
 
                     // 在工具执行前 flush 并重置流式渲染器：TerminalMarkdownRenderer 按换行 flush，
                     // 没有换行的 pending 内容会被 HITL 提示"跨过"导致标题错位。
-                    streamRenderer.resetBetweenIterations();
+                    streamRenderer.resetBetweenIterations();  // 重置渲染状态，为下一轮做准备
 
                     List<ToolExecutionResult> toolResults = executeToolCalls(response.toolCalls());
                     for (ToolExecutionResult toolResult : toolResults) {
                         conversationHistory.add(LlmClient.Message.tool(toolResult.id(), toolResult.result()));
                     }
-                    appendImageToolMessages(toolResults);
+                    appendImageToolMessages(toolResults);  // 处理返回的图片结果
                     continue;
                 }
 
@@ -286,9 +298,10 @@ public class SubAgent {
      * 清空对话历史（保留系统提示词），用于处理下一个独立任务
      */
     public void clearHistory() {
+        // 取出第 0 条（system prompt）
         LlmClient.Message systemMsg = conversationHistory.get(0);
         conversationHistory.clear();
-        conversationHistory.add(systemMsg);
+        conversationHistory.add(systemMsg);   // 把 system prompt 放回去
     }
 
     private void pruneHistoricalImagePayloads() {
@@ -317,6 +330,7 @@ public class SubAgent {
         return role == AgentRole.WORKER;
     }
 
+    //  注入 LSP 诊断报告，帮助子代理理解任务上下文
     private void injectPendingLspDiagnostics(PrintStream out) {
         LspDiagnosticReport report = toolRegistry.flushPendingLspDiagnostics();
         if (report == null || report.isEmpty()) {
@@ -437,7 +451,6 @@ public class SubAgent {
     /**
      * SubAgent 流式渲染器，分区展示 reasoning_content 与 content。
      *
-     * 与 {@link com.paicli.agent.Agent.StreamRenderer} 使用同一策略应对
      * "content 开始后又追加 reasoning"的场景：迟到的 reasoning 会被累积到 lateReasoning，
      * 在 finish() 时以"🧠 补充思考"独立展示，避免混入结果区。
      */
