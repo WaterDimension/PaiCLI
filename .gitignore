@@ -1,5 +1,6 @@
 # 环境变量文件（包含敏感信息）
 .env
+.env.example
 .paicli/*
 !.paicli/
 !.paicli/PAI.md
