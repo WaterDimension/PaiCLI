@@ -221,10 +221,11 @@ public List<ToolExecutionResult> executeTools(List<ToolInvocation> invocations) 
 ### 【学习要点】
 
 1. **ExecutorService.invokeAll() 的三大保证**：
+   
    - ✅ 返回结果保持原始顺序（即使执行顺序不同）
    - ✅ 等待所有任务完成或超时
-   - ✅ 如果超时，自动取消未完成的任务
-
+- ✅ 如果超时，自动取消未完成的任务
+   
 2. **Future.isCancelled() vs Future.get()**：
    - `isCancelled()`：检查是否被超时或主动取消（非阻塞）
    - `get()`：获取结果，如果未完成则阻塞；超时会抛 TimeoutException（已被 invokeAll 处理）
@@ -277,6 +278,7 @@ public class ToolExecutionDemo {
         );
         
         // TODO: 使用 invokeAll() 执行，超时 2.5 秒
+        List<Future<String>> futures = executor.invokeAll(tasks, 2500, TimeUnit.MILLISECONDS);
         
         executor.shutdownNow();
     }

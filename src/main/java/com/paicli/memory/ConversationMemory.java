@@ -12,10 +12,10 @@ import java.util.stream.Collectors;
  * 3. 提供关键词检索能力
  */
 public class ConversationMemory implements Memory {
-    private final LinkedHashMap<String, MemoryEntry> entries;
+    private final LinkedHashMap<String, MemoryEntry> entries; // 保持插入顺序
     private int maxTokens;
     private int currentTokens;
-    private final List<MemoryEntry> compressedSummaries;
+    private final List<MemoryEntry> compressedSummaries; // 已淘汰的条目
 
     /**
      * @param maxTokens 最大 token 预算，超出时触发压缩
@@ -27,12 +27,13 @@ public class ConversationMemory implements Memory {
         this.compressedSummaries = new ArrayList<>();
     }
 
+    // 核心机制 - 自动淘汰（LRU 风格）
     @Override
     public void store(MemoryEntry entry) {
         entries.put(entry.getId(), entry);
         currentTokens += entry.getTokenCount();
 
-        // 超出预算时自动淘汰最旧的条目
+        // 超出预算时自动淘汰最旧的条目  以token为标准，而非条数
         while (currentTokens > maxTokens && entries.size() > 1) {
             evictOldest();
         }
@@ -106,8 +107,11 @@ public class ConversationMemory implements Memory {
         if (it.hasNext()) {
             Map.Entry<String, MemoryEntry> oldest = it.next();
             it.remove();
+
+            // 全局总token减去当前淘汰条目的token占用，释放容量
             currentTokens -= oldest.getValue().getTokenCount();
-            compressedSummaries.add(oldest.getValue());
+            // 关键：不丢弃，放入待压缩列表，后续走Map-Reduce分片摘要
+            compressedSummaries.add(oldest.getValue()); 
         }
     }
 

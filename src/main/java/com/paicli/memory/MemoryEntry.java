@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * 记忆条目 - Memory 系统的基础数据单元
+ * 记忆条目 - Memory 记忆的最小单元
  */
 public class MemoryEntry {
     private final String id;

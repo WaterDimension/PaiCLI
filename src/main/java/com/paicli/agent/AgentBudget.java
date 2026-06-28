@@ -127,8 +127,8 @@ public class AgentBudget {
 
         // 4. 如果最近 N 个 signature 完全一样，标记 stagnant = true
         if (recentToolSignatures.size() == stagnationWindow) {
-            String first = recentToolSignatures.peekFirst();
-            stagnant = recentToolSignatures.stream().allMatch(sig -> sig.equals(first));
+            String first = recentToolSignatures.peekFirst();  //取出第一个元素
+            stagnant = recentToolSignatures.stream().allMatch(sig -> sig.equals(first)); //连续三次触发停滞
         }
     }
 

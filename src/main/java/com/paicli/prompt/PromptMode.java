@@ -6,7 +6,7 @@ public enum PromptMode {
         team-planner.md
      */
     AGENT("modes/agent.md"),
-    PLAN("modes/plan.md"),
+//    PLAN("modes/plan.md"),
     PLANNER("modes/planner.md"),
     TEAM_PLANNER("modes/team-planner.md"),
     TEAM_WORKER("modes/team-worker.md"),
