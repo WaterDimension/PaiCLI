@@ -1,21 +1,20 @@
 # PaiCLI
 
-一个成熟的 Java Agent CLI 产品，对标 Claude Code 作者为沉默王二，从第一期的 `ReAct` 单代理循环逐步演进到第十六期的 `TUI 产品化`。
-
-当前进度：已完成第 16.1 期 inline 流式 TUI 形态修正、第 17 期 `LSP 诊断注入` MVP、第 18 期 `Git Side-History 快照与回滚` MVP、第 19 期 `Prompt 分层架构` MVP、第 20 期 `异步后台任务 + Runtime API` MVP、第 21 期 `图片复制粘贴输入` MVP。
+一个成熟的 Java Agent CLI 产品，对标 Claude Code
+当前进度：已完成第 16.1 期 inline 流式 TUI 形态修正、第 17 期 `LSP 诊断注入` MVP、第 18 期 `Git Side-History 快照与回滚   Git Side-History Snapshots and Rollback` MVP、第 19 期 `Prompt 分层架构` MVP、第 20 期 `异步后台任务 + Runtime API   Asynchronous Background Tasks Runtime API` MVP、第 21 期 `图片复制粘贴输入` MVP。Current progress: Completed Phase 16.1 inline streaming TUI form correction, Phase 17 LSP diagnostic injection MVP, Phase 18 Git Side-History snapshot and rollback MVP, Phase 19 Prompt layered architecture MVP, Phase 20 asynchronous background task Runtime API MVP, and Phase 21 image copy-paste input MVP.
 
 ## 测试策略
 
-日常开发不需要每次都跑全量测试。`mvn clean package` 默认跳过测试，优先产出可手工验收的 jar；需要回归时按改动范围选择：
+日常开发不需要每次都跑全量测试。`mvn clean package   MVN清洁包` 默认跳过测试，优先产出可手工验收的 jar；需要回归时按改动范围选择：
 
-```bash
-# 第 16 期终端 / TUI / inline renderer 冒烟
+```bash   ”“bash
+# 第 16 期终端 / TUI / inline renderer 冒烟# Issue 16 Terminal / TUI / Inline Renderer Smoke Test# Issue 16 Terminal / TUI / Inline Renderer Smoke Test
 mvn test -Pphase16-smoke
 
 # 常规快速回归，跳过外部进程 / 网络超时 / 命令超时类慢测试
-mvn test -Pquick
+mvn test -Pquick   mvn测试-快
 
-# 代码搜索 deterministic golden set
+# 代码搜索 deterministic golden set# Code search deterministic golden set
 mvn test -Dtest=CodeSearchGoldenSetTest -DskipTests=false
 
 # 发版或大范围重构前再跑全量
@@ -24,13 +23,13 @@ mvn test -DskipTests=false
 
 ## 演进历程
 
-### 第一期：ReAct Agent CLI
+### 第一期：ReAct Agent CLI   ### Episode 1: ReAct Agent CLI
 
-- 单轮对话驱动的 `ReAct` 循环
+- 单轮对话驱动的 `ReAct   反应` 循环
 - 支持工具调用：读文件、写文件、列目录、文件 glob、代码 grep、执行命令、创建项目、RAG 语义辅助检索、联网搜索、MCP 动态工具
 - 更适合简单任务或单步操作
 
-### 第二期：Plan-and-Execute + DAG
+### 第二期：Plan-and-Execute + DAG### Phase Two: Plan-and-Execute DAG
 
 - 在保留 `ReAct` 模式的基础上新增复杂任务规划能力
 - 支持先拆解任务，再按照依赖顺序执行
@@ -42,27 +41,27 @@ mvn test -DskipTests=false
 
 - 短期记忆管理当前对话与工具结果
 - 长期记忆通过 `/save <事实>` 或用户明确说“记一下 / 记住”时的 `save_memory` 保存关键事实，默认项目级作用域，跨会话复用
-- 项目级记忆通过 `PAI.md` / `.paicli/PAI.md` 启动自动注入，适合提交到仓库的团队共享规则；`PAI.local.md` / `.paicli/PAI.local.md` 只做本地覆盖
+- 项目级记忆通过 `PAI.md` / `.paicli/PAI.md` 启动自动注入，适合提交到仓库的团队共享规则；`PAI.local.md` / `.paicli/PAI.local.md` 只做本地覆盖Project-level memory is automatically injected upon startup via `PAI.md` / `.paicli/PAI.md`, suitable for team-shared rules committed to the repository; `PAI.local.md` / `.paicli/PAI.local.md` is used only for local overrides.
 - 注入给模型的相关记忆只使用长期稳定事实，不把当前轮短期对话误当成“历史记忆”
 - 对话接近预算时自动做摘要压缩
-- 新增 `/memory` 查看状态、`/memory list/search/delete/clear` 管理长期记忆、`/save` 手动保存事实；Agent 在用户明确说“记一下 / 记住”时可调用 `save_memory`
+- 新增 `/memory` 查看状态、`/memory list/search/delete/clear` 管理长期记忆、`/save` 手动保存事实；Agent 在用户明确说“记一下 / 记住”时可调用 `save_memory`- Added `/memory   /内存` to check status, and `/memory list/search/delete/clear/内存 列表/搜索/删除/清除` to manage long-term memories; `/save   /保存` allows manual saving of facts. The agent can invoke `save_memory` when the user explicitly says "remember" or "note down."
 
 ### 第四期：RAG 检索 + 代码库理解
 
-- 代码向量化（Embedding），支持本地 Ollama 和远程 API
+- 代码向量化（Embedding），支持本地 Ollama 和远程 API- Code embedding, supporting both local Ollama and remote API
 - SQLite 持久化 + 余弦相似度语义检索
 - 代码分块（文件/类/方法粒度）与 AST 解析
-- 代码关系图谱（extends/implements/imports/calls/contains）
-- 新增 `/index`、`/search`、`/graph` CLI 命令
-- `search_code` 作为语义辅助检索工具；精确代码定位默认走 `glob_files` / `grep_code` / `read_file` 现用现查
+- 代码关系图谱（extends/implements/imports/calls/contains）- Code Relationship Graph (extends/implements/imports/calls/contains)
+- 新增 `/index`、`/search`、`/graph` CLI 命令- Added `/index   /索引`, `/search   /搜索`, and `/graph   /图` CLI commands
+- `search_code` 作为语义辅助检索工具；精确代码定位默认走 `glob_files` / `grep_code` / `read_file` 现用现查- `search_code` serves as a semantic-assisted retrieval tool; precise code location defaults to on-demand lookup via `glob_files`, `grep_code`, and `read_file`
 
-### 第五期：Multi-Agent 协作 + 角色分工
+### 第五期：Multi-Agent 协作 + 角色分工Episode 5: Multi-Agent Collaboration and Role Division
 
-- 三个角色：规划者（Planner）、执行者（Worker）、检查者（Reviewer）
-- 主从架构：编排器（Orchestrator）协调子代理（SubAgent）
+- 三个角色：规划者（Planner）、执行者（Worker）、检查者（Reviewer）- Three roles: Planner, Worker, Reviewer
+- 主从架构：编排器（Orchestrator）协调子代理（SubAgent）- Master-slave architecture: The orchestrator coordinates the sub-agents
 - 规划者拆解任务 -> 执行者执行 -> 检查者审查质量
 - 审查未通过时带反馈重试（最多 2 次），冲突自动解决
-- 新增 `/team` CLI 命令，进入多 Agent 协作模式
+- 新增 `/team` CLI 命令，进入多 Agent 协作模式- Added the `/team   /团队` CLI command to enter multi-agent collaboration mode
 
 ### 第六期：Human-in-the-Loop + 审批流
 
